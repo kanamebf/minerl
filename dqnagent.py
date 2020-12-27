@@ -132,7 +132,7 @@ class DQNAgent():
         expected_state_action_values = (next_state_values * self.GAMMA) + reward_batch
 
         # Compute Huber loss
-        loss = F.mse_loss(state_action_values, expected_state_action_values.unsqueeze(1))
+        loss = F.smooth_l1_loss(state_action_values, expected_state_action_values.unsqueeze(1))
 
         # Optimize the model
         self.optimizer.zero_grad()
@@ -142,4 +142,11 @@ class DQNAgent():
         self.optimizer.step()
 
     def target_update(self):
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+
+    def save(self, path):
+        torch.save(self.policy_net.state_dict(), path)
+
+    def load(self, path):
+        self.policy_net.load_state_dict(torch.load(path))
         self.target_net.load_state_dict(self.policy_net.state_dict())

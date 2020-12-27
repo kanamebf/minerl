@@ -1,4 +1,8 @@
 import logging
+import sys
+import os
+import argparse
+from datetime import datetime
 import copy
 import numpy as np
 
@@ -12,6 +16,11 @@ import matplotlib.pyplot as plt
 from dqnagent import DQNAgent
 
 # import faulthandler; faulthandler.enable()
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--load", help="load trained model")
+parser.add_argument("--pretrain", help="pretrain model before training")
+args = parser.parse_args()
 
 logging.basicConfig(level=logging.INFO)
 
@@ -66,6 +75,30 @@ rewards = []
 
 dqn_agent = DQNAgent(video_height,video_width,n_actions,device)
 
+if args.load:
+    dqn_agent.load(os.path.join(".",args.load))
+    print("Loaded trained model")
+
+if args.pretrain:
+    print("Start pretraining")
+    # Sample some data from the dataset!
+    data = minerl.data.make("MineRLNavigateDense-v0")
+
+    # Iterate through a single epoch using sequences of at most 32 steps
+    for obs, rew, done, act in data.seq_iter(num_epochs=10, batch_size=32):
+    # Do something    
+    print("Ended pretraining")
+
+today = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+def save_plot(rewards):
+    plt.clf()
+    plt.plot([ind for ind in range(len(rewards))],rewards)
+    plt.xlabel("Episode i")
+    plt.ylabel("Cumulative reward during episode i")
+    plt.title("Training in {}".format(env_name))
+    plt.savefig('training_{}.png'.format(env_name))
+
 for i_episode in range(num_eps):
     logger.info("Episode {} has started.".format(i_episode))  
     obs = env.reset()
@@ -103,10 +136,8 @@ for i_episode in range(num_eps):
             done = True
     rewards.append(cum_rew)
     logger.info("Episode {} has ended. Cumulative reward: {}".format(i_episode,cum_rew))
+    save_plot(rewards)
+    path_folder = os.path.join("./models",env_name,today)
+    os.system("mkdir -p {}".format(path_folder))
+    # dqn_agent.save(os.path.join(path_folder,"dqn_ep{}_rw{}.model".format(i_episode,int(cum_rew))))
 logger.info("End of Training") 
-
-plt.plot([ind for ind in range(num_eps)],rewards)
-plt.xlabel("Episode i")
-plt.ylabel("Cumulative reward during episode i")
-plt.title("Training in {}".format(env_name))
-plt.savefig('training_{}.png'.format(env_name))
