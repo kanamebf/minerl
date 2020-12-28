@@ -82,7 +82,7 @@ class DQNAgent():
         self.EPS_DECAY = 1000*80 # 80 episodes of 1000 steps each
         self.TARGET_UPDATE = 10
         self.BATCH_SIZE = 1
-        self.memory = ReplayMemory(64)
+        self.memory = ReplayMemory(10000)
 
     def act(self, state):
         sample = random.random()
