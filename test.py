@@ -63,10 +63,11 @@ def format_action(no_act,act_ind):
 
     if act_ind < 9:
         action[act_keys[act_ind]] = 1
+    elif act_in
     elif act_ind == 9 or act_ind == 10:
-        action[act_keys[-1]][0] = 5.0*pow(-1,act_ind%9)
+        action[act_keys[-1]][0] = 3.0*pow(-1,act_ind%9)
     elif act_ind == 11 or act_ind == 12:
-        action[act_keys[-1]][1] = 5.0*pow(-1,act_ind%11)
+        action[act_keys[-1]][1] = 3.0*pow(-1,act_ind%11)
 
     return action
 
