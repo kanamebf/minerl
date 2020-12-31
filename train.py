@@ -17,10 +17,10 @@ from PIL import Image
 
 import minerl
 
-resize = T.Compose([T.ToPILImage(), T.Resize(40, interpolation=Image.CUBIC), T.ToTensor()])
+resize = T.Compose([T.ToPILImage(), T.Resize(84, interpolation=Image.CUBIC), T.ToTensor(), T.Normalize(mean=255/2,std=255/2)])
 
-video_height = 64
-video_width = 64
+video_height, video_width = 210, 160
+# video_height, video_width = 64, 64
 
 class ReplayBuffer:
     """A simple numpy replay buffer."""
@@ -151,51 +151,50 @@ class Network(nn.Module):
         """Initialization."""
         super(Network, self).__init__()
 
-        # video_height = in_dim[-2]
-        # video_width = in_dim[-1]
-        def conv2d_size_out(size, kernel_size = 3, stride = 2):
+        def conv2d_size_out(size, kernel_size = 5, stride = 2):
             return (size - (kernel_size - 1) - 1) // stride  + 1
-        convw = conv2d_size_out(conv2d_size_out(conv2d_size_out(conv2d_size_out(conv2d_size_out(video_width))), stride=1), stride=1)
-        convh = conv2d_size_out(conv2d_size_out(conv2d_size_out(conv2d_size_out(conv2d_size_out(video_height))), stride=1), stride=1)
+        convw = conv2d_size_out(conv2d_size_out(conv2d_size_out(conv2d_size_out(conv2d_size_out(video_width))), stride=2), stride=1)
+        convh = conv2d_size_out(conv2d_size_out(conv2d_size_out(conv2d_size_out(conv2d_size_out(video_height))), stride=2), stride=1)
         # linear_input_size = convw * convh * 32 + 2 # image features + compass + inventory
-        linear_input_size = convw * convh * 16 + 2
+        linear_input_size = convw * convh * 16
 
         self.layers = nn.Sequential(
-            # nn.Conv2d(3, 16, kernel_size=3, stride=2),
-            # nn.BatchNorm2d(16),
-            # nn.LeakyReLU(),
-            # nn.Conv2d(16, 16, kernel_size=3, stride=2),
-            # nn.BatchNorm2d(16),
-            # nn.LeakyReLU(),
-            # nn.Conv2d(16, 32, kernel_size=3, stride=2),
-            # nn.BatchNorm2d(32),
-            # nn.LeakyReLU(),
-            # nn.Conv2d(32, 32, kernel_size=3, stride=1),
-            # nn.BatchNorm2d(32),
-            # nn.LeakyReLU(),
-            # nn.Conv2d(32, 16, kernel_size=3, stride=1),
-            # nn.BatchNorm2d(16),
-            # nn.LeakyReLU(),
-            nn.Linear(2, 32), 
-            nn.ReLU(),
-            nn.Linear(32, 32), 
-            nn.ReLU(), 
-            nn.Linear(32, out_dim)
+            nn.Conv2d(3, 16, kernel_size=5, stride=2),
+            nn.BatchNorm2d(16),
+            nn.LeakyReLU(),
+            nn.Conv2d(16, 16, kernel_size=5, stride=2),
+            nn.BatchNorm2d(16),
+            nn.LeakyReLU(),
+            nn.Conv2d(16, 32, kernel_size=5, stride=2),
+            nn.BatchNorm2d(32),
+            nn.LeakyReLU(),
+            nn.Conv2d(32, 32, kernel_size=5, stride=2),
+            nn.BatchNorm2d(32),
+            nn.LeakyReLU(),
+            nn.Conv2d(32, 16, kernel_size=5, stride=1),
+            nn.BatchNorm2d(16),
+            nn.LeakyReLU(),
+            # nn.Linear(2, 32), 
+            # nn.ReLU(),
+            # nn.Linear(32, 32), 
+            # nn.ReLU(), 
+            # nn.Linear(32, out_dim)
         )
-        # self.fc1 = nn.Linear(linear_input_size, out_dim*20)
-        # self.act1 = nn.Tanh()
-        # self.fc2 = nn.Linear(out_dim*20, out_dim)
+        self.fc1 = nn.Linear(linear_input_size, out_dim*10)
+        self.act1 = nn.Tanh()
+        self.fc2 = nn.Linear(out_dim*10, out_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward method implementation."""
         if len(x.shape) == 1:
             x = x.unsqueeze(0)
         # im = x[:,:-2].view(-1,3,video_height,video_width)
-        # im_ft = self.layers(im)
+        im = x.view(-1,3,video_height,video_width)
+        x = self.layers(im)
         # x = torch.cat([im_ft.view(im_ft.shape[0],-1),x[:,-2:]],dim=1)
-        # x = self.act1(self.fc1(x.view(x.shape[0],-1)))
-        # x = self.fc2(x)
-        x = self.layers(x[:,-2:])
+        x = self.act1(self.fc1(x.view(x.shape[0],-1)))
+        x = self.fc2(x)
+        # x = self.layers(x[:,-2:])
         return x
 
 class DQNAgent:
@@ -228,7 +227,7 @@ class DQNAgent:
         epsilon_decay: float,
         max_epsilon: float = 1.0,
         min_epsilon: float = 0.1,
-        gamma: float = 0.95,
+        gamma: float = 0.99,
         # PER parameters
         alpha: float = 0.2,
         beta: float = 0.6,
@@ -269,13 +268,13 @@ class DQNAgent:
 
         # obs_dim = env.observation_space.shape[0]
         obs = self.env.reset()
-        self.n_frames = 5
-        self.frames = [self.get_screen()]*self.n_frames
+        self.n_frames = 4
+        self.frames = [self.get_screen(obs)]*self.n_frames
         state_dim = self.get_state(obs).shape
 
         self.act_keys = ['attack','back','forward','jump','left','place','right','sneak','sprint','camera']
-        self.action_dim = len(self.act_keys) + 3 + 1 #act_keys + camera(the other direction) + no-op
-        # action_dim = env.action_space.n
+        # self.action_dim = len(self.act_keys) + 3 + 1 #act_keys + camera(the other direction) + no-op
+        self.action_dim = env.action_space.n
         # action_dim = env.action_space.shape[0]
 
         # Prioritized Experience Replay
@@ -291,7 +290,7 @@ class DQNAgent:
         self.dqn_target.eval()
         
         # optimizer
-        self.optimizer = optim.Adam(self.dqn.parameters())
+        self.optimizer = optim.Adam(self.dqn.parameters(),lr=0.00005)
 
         # transition to store in memory
         self.transition = list()
@@ -312,7 +311,8 @@ class DQNAgent:
                 # selected_action = self.env.action_space.sample()
                 selected_action = torch.tensor([[random.randrange(self.action_dim)]], device=self.device, dtype=torch.long)
                 self.count = 0
-                self.randperiod = random.randrange(start=1,stop=10)
+                # self.randperiod = random.randrange(start=1,stop=10)
+                self.randperiod = 0
                 self.randaction = selected_action
             else:
                 with torch.no_grad():
@@ -345,12 +345,13 @@ class DQNAgent:
 
     def step(self, action: torch.Tensor, time, score) -> Tuple[torch.Tensor, np.float64, bool]:
         """Take an action and return the response of the env."""
-        next_obs, reward, done, _ = self.env.step(self.format_action(self.env.action_space.noop,action))
+        # next_obs, reward, done, _ = self.env.step(self.format_action(noop,action))
+        next_obs, reward, done, _ = self.env.step(action)
 
-        time_limit_idx = 2000
-        rew_limit = -5
-        if score < rew_limit or (time > time_limit_idx and score < -rew_limit) or time>time_limit_idx*5:
-            done = True
+        # time_limit_idx = 2000
+        # rew_limit = -5
+        # if score < rew_limit or (time > time_limit_idx and score < -rew_limit) or time>time_limit_idx*5:
+        #     done = True
 
         next_state = self.get_state(next_obs)
 
@@ -385,40 +386,48 @@ class DQNAgent:
         return loss.item()
 
     def im_prep(self,data):
-        data = torch.tensor(data)
+        # data = torch.tensor(data)
+        data = resize(data)
         # data = data.view(video_height,video_width,-1)
-        marg = 255/2.0
-        data = (data - marg)/marg
+        # marg = 255/2.0
+        # data = (data - marg)/marg
         # data = data.permute(2,0,1).unsqueeze(0)
         # return data.view(-1,3*video_height*video_width)
         if len(data.shape) == 3:
-            return torch.flatten(data)
+            data = data.permute(2,0,1).unsqueeze(0)
+            return data
+            # data = torch.mean(data,dim=0)
+            # return torch.flatten(data)
         else:
-            return data.view(data.shape[0],-1)
+            return data.permute(2,0,1)
+            # data = torch.mean(data,dim=1)
+            # return data.view(data.shape[0],-1)
 
     def get_state(self,obs=None):
-        # self.frames = self.frames[1:] + [self.get_screen()]
-        # state = torch.cat(self.frames, dim=-2).to(self.device)
+        # self.frames = self.frames[1:] + [self.get_screen(obs)]
+        self.frames = self.frames[1:] + [self.get_screen(obs)]
+        state = torch.cat(self.frames, dim=-2).to(self.device)
         # # state = torch.Tensor(obs).to(self.device)
         # return state
-        im = self.im_prep(obs['pov'])
-        other = np.stack([obs['compassAngle'],obs['inventory']['dirt']],axis=len(obs['compassAngle'].shape)-1)
+        # im = self.im_prep(obs['pov'])
+        return state
+        # other = np.stack([obs['compassAngle'],obs['inventory']['dirt']],axis=len(obs['compassAngle'].shape)-1)
         # other = np.expand_dims(other, axis=0)
-        other = torch.Tensor(other)
-        if len(other.shape) == 1:
-            return torch.cat((im,other),dim=0).to(self.device)
-        else:
-            return torch.cat((im,other.view(other.shape[0],-1)),dim=1).to(self.device)
+        # other = torch.Tensor(other)
+        # if len(other.shape) == 1:
+        #     return torch.cat((im,other),dim=0).to(self.device)
+        # else:
+        #     return torch.cat((im,other.view(other.shape[0],-1)),dim=1).to(self.device)
         
 
-    def get_screen(self):
+    def get_screen(self,obs=None):
         # def get_cart_location(screen_width):
         #     world_width = self.env.x_threshold * 2
         #     scale = screen_width / world_width
         #     return int(self.env.state[0] * scale + screen_width / 2.0)  # MIDDLE OF CART
         # Returned screen requested by gym is 400x600x3, but is sometimes larger
         # such as 800x1200x3. Transpose it into torch order (CHW).
-        screen = self.env.render(mode='rgb_array').transpose((2, 0, 1))/255.0
+        # screen = self.env.render(mode='rgb_array').transpose((2, 0, 1))/255.0
         # Cart is in the lower half, so strip off the top and bottom of the screen
         # _, screen_height, screen_width = screen.shape
         # screen = screen[:, int(screen_height*0.4):int(screen_height * 0.8)]
@@ -436,10 +445,12 @@ class DQNAgent:
         # # Convert to float, rescale, convert to torch tensor
         # # (this doesn't require a copy)
         # screen = np.ascontiguousarray(screen, dtype=np.float32) / 255
-        screen = torch.Tensor(screen)
+        # screen = torch.Tensor(screen)
         # Resize, and add a batch dimension (BCHW)
         # return resize(screen).unsqueeze(0)
-        return resize(screen)
+        screen = self.im_prep(obs)
+        return screen
+        # return resize(screen)
 
     def act_to_ind(self,action,batch_size):
         indeces = torch.zeros(size=(batch_size,1),dtype=torch.long)
@@ -467,33 +478,39 @@ class DQNAgent:
                 indeces[b][0] = inds[random.randrange(start=0,stop=len(inds)-1)]
         return indeces.cpu()
 
-    def pretrain(self,data):
+    def pretrain(self,num_frames):
         # Iterate through a single epoch using sequences of at most 32 steps
-        batch_size = 128
+        batch_size = self.batch_size
         losses = []
         upt_cnt = 0
-        for batch in data.batch_iter(batch_size=batch_size, seq_len=1, num_epochs=-1):
+
+        # Sample some data from the dataset!
+        data = minerl.data.make("MineRLNavigateDense-v0",data_dir="data")
+        for batch in data.batch_iter(batch_size=self.batch_size, seq_len=1, num_epochs=-1):
             upt_cnt += 1
             samples = {}
             samples["state"] = self.get_state(batch[0]).cpu()
             samples["next_state"] = self.get_state(batch[3]).cpu()
-            samples["acts"] = self.act_to_ind(batch[1],batch_size) 
+            samples["acts"] = self.act_to_ind(batch[1],self.batch_size) 
             samples["rews"] = batch[2]
             samples["done"] = batch[4]
             elementwise_loss = self._compute_dqn_loss(samples)
             loss = torch.mean(elementwise_loss)
+            losses.append(loss)
 
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
 
-            if upt_cnt % 3000:
+            if upt_cnt % self.target_update == 0:
                 self._target_hard_update()
-                losses.append(loss)
                 plt.clf()
                 plt.plot(losses)
                 plt.savefig('pretraining_{}.png'.format(self.env.spec.id))
                 plt.close()
+
+            if upt_cnt > num_frames:
+                break
         
 
     def train(self, num_frames: int, plotting_interval: int = 200):
@@ -501,8 +518,11 @@ class DQNAgent:
         self.is_test = False
         
         obs = self.env.reset()
-        # self.frames = [self.get_screen()]*self.n_frames
-        state = self.get_state(obs)
+        for _ in range(random.randint(0, 10)):
+            obs, _, _, _= self.env.step(1)
+            state = self.get_state(obs)
+        # self.frames = [self.get_screen(obs)]*self.n_frames
+        
 
         update_cnt = 0
         epsilons = []
@@ -514,7 +534,7 @@ class DQNAgent:
 
         for frame_idx in range(1, num_frames + 1):
             action = self.select_action(state)
-            next_state, reward, done = self.step(action,frame_idx-begin_idx,score)
+            next_state, reward, done, info = self.step(action,frame_idx-begin_idx,score)
 
             state = next_state
             score += reward
@@ -523,11 +543,16 @@ class DQNAgent:
             fraction = min(frame_idx / num_frames, 1.0)
             self.beta = self.beta + fraction * (1.0 - self.beta)
 
+            if info["ale.lives"] != lives:
+                lives = info["ale.lives"]
+
             # if episode ends
             if done:
                 obs = self.env.reset()
-                # self.frames = [self.get_screen()]*self.n_frames
-                state = self.get_state(obs)
+                self.frames = [self.get_screen(obs)]*self.n_frames
+                for _ in range(random.randint(0, 10)):
+                    obs, _, _, _= self.env.step(1)
+                    state = self.get_state(obs)
                 scores.append(score)
                 score = 0
                 begin_idx = frame_idx
@@ -623,22 +648,21 @@ class DQNAgent:
 # environment
 # env_id = "CartPole-v1"
 # env_id = "CarRacing-v0"
-env_id = 'MineRLNavigateDense-v0'
+# env_id = 'MineRLNavigateDense-v0'
+env_id = "Breakout-v0"
 env = gym.make(env_id)
 # env.reset()
 
 # parameters
-num_frames = 300000
-memory_size = 50000
-batch_size = 128
-target_update = 4000
-epsilon_decay = 1 / 10000
+pre_num_frames = 500000
+num_frames = 3000000
+memory_size = 100000
+batch_size = 32
+target_update = 10000
+epsilon_decay = 1 / 1000000
 
 agent = DQNAgent(env, memory_size, batch_size, target_update, epsilon_decay)
 
-# Sample some data from the dataset!
-data = minerl.data.make("MineRLNavigateDense-v0",data_dir="data")
+# agent.pretrain(pre_num_frames)
 
-agent.pretrain(data)
-
-# agent.train(num_frames)
+agent.train(num_frames)
