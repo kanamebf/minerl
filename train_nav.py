@@ -154,8 +154,8 @@ class Network(nn.Module):
         """Initialization."""
         super(Network, self).__init__()
 
-        convw = in_dim[-1]
-        convh = in_dim[-2]
+        convw = video_width
+        convh = video_height
         in_ch = in_dim[-3]
         kernels = [8,4,3]
         strides = [4,2,1]
@@ -171,7 +171,7 @@ class Network(nn.Module):
             layers.append(nn.BatchNorm2d(channels[ind+1]))
             layers.append(nn.LeakyReLU())
         # linear_input_size = convw * convh * 32 + 2 # image features + compass + inventory
-        linear_input_size = convw * convh * channels[-1]
+        linear_input_size = convw * convh * channels[-1] + self.n_frames * 2
 
         self.net = nn.Sequential(*layers)
         self.fc1 = nn.Linear(linear_input_size, 512)
@@ -182,15 +182,15 @@ class Network(nn.Module):
         """Forward method implementation."""
         if len(x.shape) == 1 or len(x.shape) == 3:
             x = x.unsqueeze(0)
-        # im = x[:,:-2].view(-1,3,video_height,video_width)
+        im = x[...,:-2].view(-1,x.shape[1],video_height,video_width)
         # im = x.view(-1,self.state_dim[-3],self.state_dim[-2],self.state_dim[-1])
         # im = x.view(-1,3,self.status_,video_width)
-        x = self.net(x)
-        # x = torch.cat([im_ft.view(im_ft.shape[0],-1),x[:,-2:]],dim=1)
-        x = self.act1(self.fc1(x.view(x.shape[0],-1)))
-        x = self.fc2(x)
+        im = self.net(im)
+        feat = torch.cat([im.view(im.shape[0],-1),x[...,-2:].view(x.shape[0],-1)],dim=1)
+        feat = self.act1(self.fc1(feat.view(feat.shape[0],-1)))
+        feat = self.fc2(feat)
         # x = self.net(x[:,-2:])
-        return x
+        return feat
 
 class DQNAgent:
     """DQN Agent interacting with environment.
@@ -274,15 +274,12 @@ class DQNAgent:
         self.action_dim = env.action_space.n
         # action_dim = env.action_space.shape[0]
 
-        #Starting number of lives in Breakout
-        self.lives = 5
-
         # Prioritized Experience Replay
         self.min_memory = 30000
         self.beta = beta
         self.prior_eps = prior_eps
-        self.memory = PrioritizedReplayBuffer(self.state_dim, memory_size, self.batch_size, alpha)
-        # self.memory = ReplayBuffer(self.state_dim, memory_size, self.batch_size)
+        # self.memory = PrioritizedReplayBuffer(self.state_dim, memory_size, self.batch_size, alpha)
+        self.memory = ReplayBuffer(self.state_dim, memory_size, self.batch_size)
 
         # networks: dqn, dqn_target
         self.dqn = Network(self.state_dim, self.action_dim).to(self.device)
@@ -312,8 +309,8 @@ class DQNAgent:
                 # selected_action = self.env.action_space.sample()
                 selected_action = torch.tensor([[random.randrange(self.action_dim)]], device=self.device, dtype=torch.long)
                 self.count = 0
-                # self.randperiod = random.randrange(start=1,stop=10)
-                self.randperiod = 0
+                self.randperiod = random.randrange(start=1,stop=10)
+                # self.randperiod = 0
                 self.randaction = selected_action
             else:
                 with torch.no_grad():
@@ -346,53 +343,49 @@ class DQNAgent:
 
     def step(self, action: torch.Tensor, time, score) -> Tuple[torch.Tensor, np.float64, bool]:
         """Take an action and return the response of the env."""
-        # next_obs, reward, done, _ = self.env.step(self.format_action(noop,action))
-        next_obs, reward, done, info = self.env.step(action)
+        next_obs, reward, done = self.env.step(self.format_action(noop,action))
+        # next_obs, reward, done, tmp = self.env.step(action)
 
-        # time_limit_idx = 2000
-        # rew_limit = -5
-        # if score < rew_limit or (time > time_limit_idx and score < -rew_limit) or time>time_limit_idx*5:
-        #     done = True
+        time_limit_idx = 2000
+        rew_limit = -5
+        if score < rew_limit or (time > time_limit_idx and score < -rew_limit) or time>time_limit_idx*5:
+            done = True
 
         next_state = self.get_state(next_obs)
-
-        end_ep = done
-        if info["ale.lives"] != self.lives:
-            self.lives = info["ale.lives"]
-            done = True
 
         if not self.is_test:
             self.transition += [reward, next_state, done]
             self.memory.store(*self.transition)
     
-        return next_state, reward, end_ep
+        return next_state, reward, done
 
     def update_model(self) -> torch.Tensor:
         """Update the model by gradient descent."""
         # PER needs beta to calculate weights
-        samples = self.memory.sample_batch(self.beta)
-        weights = torch.FloatTensor(samples["weights"].reshape(-1, 1)).to(self.device)
-        indices = samples["indices"]
-        # samples = self.memory.sample_batch()
+        # samples = self.memory.sample_batch(self.beta)
+        # weights = torch.FloatTensor(samples["weights"].reshape(-1, 1)).to(self.device)
+        # indices = samples["indices"]
+        samples = self.memory.sample_batch()
 
         # PER: importance sampling before average
-        elementwise_loss = self._compute_dqn_loss(samples)
-        loss = torch.mean(elementwise_loss * weights)
+        # elementwise_loss = self._compute_dqn_loss(samples)
+        # loss = torch.mean(elementwise_loss * weights)
         # loss = torch.mean(elementwise_loss)
-        # loss = self._compute_dqn_loss(samples)
+        loss = self._compute_dqn_loss(samples)
 
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
 
         # PER: update priorities
-        loss_for_prior = elementwise_loss.detach().cpu().numpy()
-        new_priorities = loss_for_prior + self.prior_eps
-        self.memory.update_priorities(indices, new_priorities)
+        # loss_for_prior = elementwise_loss.detach().cpu().numpy()
+        # new_priorities = loss_for_prior + self.prior_eps
+        # self.memory.update_priorities(indices, new_priorities)
 
         return loss.item()
 
     def im_prep(self,data):
+        data = self.im_prep(data['pov'])
         data = torch.Tensor(data)
         
         # data = data.view(video_height,video_width,-1)
@@ -457,7 +450,11 @@ class DQNAgent:
         # Resize, and add a batch dimension (BCHW)
         # return resize(screen).unsqueeze(0)
         screen = self.im_prep(obs)
-        return resize(screen)
+        screen = resize(screen)
+        other = np.stack([obs['compassAngle'],obs['inventory']['dirt']],axis=len(obs['compassAngle'].shape)-1)
+        other = torch.Tensor(other)
+        screen = torch.cat([screen.flatten(),other],dim=1)
+        return screen
 
     def act_to_ind(self,action,batch_size):
         indeces = torch.zeros(size=(batch_size,1),dtype=torch.long)
@@ -525,12 +522,11 @@ class DQNAgent:
         self.is_test = False
         
         obs = self.env.reset()
+        self.frames = [self.get_screen(obs)]*self.n_frames
         state = self.get_state(obs)
-        for _ in range(random.randint(0, 10)):
-            obs, _, _, _= self.env.step(1)
-            state = self.get_state(obs)
-        # self.frames = [self.get_screen(obs)]*self.n_frames
-        
+        # for _ in range(random.randint(0, 10)):
+        #     obs, _, _, _= self.env.step(1)
+        #     state = self.get_state(obs)        
 
         update_cnt = 0
         epsilons = []
@@ -551,16 +547,16 @@ class DQNAgent:
             score += reward
 
             # PER: increase beta
-            fraction = min(frame_idx / num_frames, 1.0)
-            self.beta = self.beta + fraction * (1.0 - self.beta)
+            # fraction = min(frame_idx / num_frames, 1.0)
+            # self.beta = self.beta + fraction * (1.0 - self.beta)
 
             # if episode ends
             if done:
                 obs = self.env.reset()
                 self.frames = [self.get_screen(obs)]*self.n_frames
-                for _ in range(random.randint(0, 10)):
-                    obs, _, _, _= self.env.step(1)
-                    state = self.get_state(obs)
+                # for _ in range(random.randint(0, 10)):
+                #     obs, _, _, _= self.env.step(1)
+                state = self.get_state(obs)
                 scores.append(score)
                 score_avg += (-score_avg + score)/tau_avg
                 avg_scores.append(score_avg)
@@ -624,14 +620,13 @@ class DQNAgent:
         # G_t   = r + gamma * v(s_{t+1})  if state != Terminal
         #       = r                       otherwise
         curr_q_value = self.dqn(state).gather(1, action)
-        # next_q_value = self.dqn_target(next_state).max(dim=1, keepdim=True)[0].detach()
-        next_q_value = self.dqn_target(next_state).gather(1, self.dqn(next_state).argmax(dim=1, keepdim=True)).detach()
+        next_q_value = self.dqn_target(next_state).max(dim=1, keepdim=True)[0].detach()
+        # next_q_value = self.dqn_target(next_state).gather(1, self.dqn(next_state).argmax(dim=1, keepdim=True)).detach()
         mask = 1 - done
         target = (reward + self.gamma * next_q_value * mask).to(self.device)
 
         # calculate element-wise dqn loss
-        elementwise_loss = F.smooth_l1_loss(curr_q_value, target, reduction="none")
-        # elementwise_loss = F.smooth_l1_loss(curr_q_value, target)
+        elementwise_loss = F.smooth_l1_loss(curr_q_value, target)
 
         return elementwise_loss
 
@@ -657,21 +652,21 @@ class DQNAgent:
         plt.title('epsilons')
         plt.plot(epsilons)
         # plt.show()
-        plt.savefig('training_{}_withlargermemory_lifetrick_ddqn_per.png'.format(self.env.spec.id))
+        plt.savefig('training_{}.png'.format(self.env.spec.id))
         plt.close()
 
 # environment
 # env_id = "CartPole-v1"
 # env_id = "CarRacing-v0"
-# env_id = 'MineRLNavigateDense-v0'
-env_id = "BreakoutDeterministic-v4"
+env_id = 'MineRLNavigateDense-v0'
+# env_id = "BreakoutDeterministic-v4"
 env = gym.make(env_id)
 # env.reset()
 
 # parameters
 pre_num_frames = 500000
-num_frames = 5000000
-memory_size = 500000
+num_frames = 4000000
+memory_size = 350000
 batch_size = 32
 main_update = 4
 target_update = 10000
