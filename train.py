@@ -17,9 +17,12 @@ from PIL import Image
 
 import minerl
 
-resize = T.Compose([T.ToPILImage(), T.Resize(84, interpolation=Image.CUBIC), T.ToTensor(), T.Normalize(mean=255/2,std=255/2)])
+video_height = 84
+video_width = 84
 
-video_height, video_width = 210, 160
+resize = T.Compose([T.ToPILImage(), T.Resize((video_height,video_width), interpolation=Image.CUBIC), T.Grayscale(num_output_channels=1), T.ToTensor(), T.Normalize(mean=0,std=255)])
+
+# video_height, video_width = 210, 160
 # video_height, video_width = 64, 64
 
 class ReplayBuffer:
@@ -151,50 +154,42 @@ class Network(nn.Module):
         """Initialization."""
         super(Network, self).__init__()
 
+        convw = in_dim[-1]
+        convh = in_dim[-2]
+        in_ch = in_dim[-3]
+        kernels = [8,4,3]
+        strides = [4,2,1]
+        channels = [in_ch,32,64,64]
+        layers = []
         def conv2d_size_out(size, kernel_size = 5, stride = 2):
             return (size - (kernel_size - 1) - 1) // stride  + 1
-        convw = conv2d_size_out(conv2d_size_out(conv2d_size_out(conv2d_size_out(conv2d_size_out(video_width))), stride=2), stride=1)
-        convh = conv2d_size_out(conv2d_size_out(conv2d_size_out(conv2d_size_out(conv2d_size_out(video_height))), stride=2), stride=1)
+        
+        for ind in range(len(kernels)):
+            convw = conv2d_size_out(size=convw, kernel_size=kernels[ind], stride=strides[ind])
+            convh = conv2d_size_out(size=convh, kernel_size=kernels[ind], stride=strides[ind])
+            layers.append(nn.Conv2d(channels[ind], channels[ind+1], kernel_size=kernels[ind], stride=strides[ind]))
+            layers.append(nn.BatchNorm2d(channels[ind+1]))
+            layers.append(nn.LeakyReLU())
         # linear_input_size = convw * convh * 32 + 2 # image features + compass + inventory
-        linear_input_size = convw * convh * 16
+        linear_input_size = convw * convh * channels[-1]
 
-        self.layers = nn.Sequential(
-            nn.Conv2d(3, 16, kernel_size=5, stride=2),
-            nn.BatchNorm2d(16),
-            nn.LeakyReLU(),
-            nn.Conv2d(16, 16, kernel_size=5, stride=2),
-            nn.BatchNorm2d(16),
-            nn.LeakyReLU(),
-            nn.Conv2d(16, 32, kernel_size=5, stride=2),
-            nn.BatchNorm2d(32),
-            nn.LeakyReLU(),
-            nn.Conv2d(32, 32, kernel_size=5, stride=2),
-            nn.BatchNorm2d(32),
-            nn.LeakyReLU(),
-            nn.Conv2d(32, 16, kernel_size=5, stride=1),
-            nn.BatchNorm2d(16),
-            nn.LeakyReLU(),
-            # nn.Linear(2, 32), 
-            # nn.ReLU(),
-            # nn.Linear(32, 32), 
-            # nn.ReLU(), 
-            # nn.Linear(32, out_dim)
-        )
-        self.fc1 = nn.Linear(linear_input_size, out_dim*10)
+        self.net = nn.Sequential(*layers)
+        self.fc1 = nn.Linear(linear_input_size, 512)
         self.act1 = nn.Tanh()
-        self.fc2 = nn.Linear(out_dim*10, out_dim)
+        self.fc2 = nn.Linear(512, out_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward method implementation."""
-        if len(x.shape) == 1:
+        if len(x.shape) == 1 or len(x.shape) == 3:
             x = x.unsqueeze(0)
         # im = x[:,:-2].view(-1,3,video_height,video_width)
-        im = x.view(-1,3,video_height,video_width)
-        x = self.layers(im)
+        # im = x.view(-1,self.state_dim[-3],self.state_dim[-2],self.state_dim[-1])
+        # im = x.view(-1,3,self.status_,video_width)
+        x = self.net(x)
         # x = torch.cat([im_ft.view(im_ft.shape[0],-1),x[:,-2:]],dim=1)
         x = self.act1(self.fc1(x.view(x.shape[0],-1)))
         x = self.fc2(x)
-        # x = self.layers(x[:,-2:])
+        # x = self.net(x[:,-2:])
         return x
 
 class DQNAgent:
@@ -223,11 +218,12 @@ class DQNAgent:
         env: gym.Env,
         memory_size: int,
         batch_size: int,
+        main_update: int,
         target_update: int,
         epsilon_decay: float,
         max_epsilon: float = 1.0,
-        min_epsilon: float = 0.1,
-        gamma: float = 0.99,
+        min_epsilon: float = 0.05,
+        gamma: float = 0.98,
         # PER parameters
         alpha: float = 0.2,
         beta: float = 0.6,
@@ -255,6 +251,7 @@ class DQNAgent:
         self.epsilon_decay = epsilon_decay
         self.max_epsilon = max_epsilon
         self.min_epsilon = min_epsilon
+        self.main_update = main_update
         self.target_update = target_update
         self.gamma = gamma
 
@@ -270,7 +267,7 @@ class DQNAgent:
         obs = self.env.reset()
         self.n_frames = 4
         self.frames = [self.get_screen(obs)]*self.n_frames
-        state_dim = self.get_state(obs).shape
+        self.state_dim = self.get_state(obs).shape
 
         self.act_keys = ['attack','back','forward','jump','left','place','right','sneak','sprint','camera']
         # self.action_dim = len(self.act_keys) + 3 + 1 #act_keys + camera(the other direction) + no-op
@@ -278,14 +275,15 @@ class DQNAgent:
         # action_dim = env.action_space.shape[0]
 
         # Prioritized Experience Replay
+        self.min_memory = 30000
         self.beta = beta
         self.prior_eps = prior_eps
-        self.memory = PrioritizedReplayBuffer(state_dim, memory_size, self.batch_size, alpha)
-        # self.memory = ReplayBuffer(state_dim, memory_size, self.batch_size)
+        # self.memory = PrioritizedReplayBuffer(self.state_dim, memory_size, self.batch_size, alpha)
+        self.memory = ReplayBuffer(self.state_dim, memory_size, self.batch_size)
 
         # networks: dqn, dqn_target
-        self.dqn = Network(state_dim, self.action_dim).to(self.device)
-        self.dqn_target = Network(state_dim, self.action_dim).to(self.device)
+        self.dqn = Network(self.state_dim, self.action_dim).to(self.device)
+        self.dqn_target = Network(self.state_dim, self.action_dim).to(self.device)
         self.dqn_target.load_state_dict(self.dqn.state_dict())
         self.dqn_target.eval()
         
@@ -346,7 +344,7 @@ class DQNAgent:
     def step(self, action: torch.Tensor, time, score) -> Tuple[torch.Tensor, np.float64, bool]:
         """Take an action and return the response of the env."""
         # next_obs, reward, done, _ = self.env.step(self.format_action(noop,action))
-        next_obs, reward, done, _ = self.env.step(action)
+        next_obs, reward, done, tmp = self.env.step(action)
 
         # time_limit_idx = 2000
         # rew_limit = -5
@@ -364,49 +362,51 @@ class DQNAgent:
     def update_model(self) -> torch.Tensor:
         """Update the model by gradient descent."""
         # PER needs beta to calculate weights
-        samples = self.memory.sample_batch(self.beta)
-        weights = torch.FloatTensor(samples["weights"].reshape(-1, 1)).to(self.device)
-        indices = samples["indices"]
-        # samples = self.memory.sample_batch()
+        # samples = self.memory.sample_batch(self.beta)
+        # weights = torch.FloatTensor(samples["weights"].reshape(-1, 1)).to(self.device)
+        # indices = samples["indices"]
+        samples = self.memory.sample_batch()
 
         # PER: importance sampling before average
-        elementwise_loss = self._compute_dqn_loss(samples)
-        loss = torch.mean(elementwise_loss * weights)
-        # loss = self._compute_dqn_loss(samples)
+        # elementwise_loss = self._compute_dqn_loss(samples)
+        # loss = torch.mean(elementwise_loss * weights)
+        # loss = torch.mean(elementwise_loss)
+        loss = self._compute_dqn_loss(samples)
 
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
 
         # PER: update priorities
-        loss_for_prior = elementwise_loss.detach().cpu().numpy()
-        new_priorities = loss_for_prior + self.prior_eps
-        self.memory.update_priorities(indices, new_priorities)
+        # loss_for_prior = elementwise_loss.detach().cpu().numpy()
+        # new_priorities = loss_for_prior + self.prior_eps
+        # self.memory.update_priorities(indices, new_priorities)
 
         return loss.item()
 
     def im_prep(self,data):
-        # data = torch.tensor(data)
-        data = resize(data)
+        data = torch.Tensor(data)
+        
         # data = data.view(video_height,video_width,-1)
         # marg = 255/2.0
         # data = (data - marg)/marg
         # data = data.permute(2,0,1).unsqueeze(0)
         # return data.view(-1,3*video_height*video_width)
         if len(data.shape) == 3:
-            data = data.permute(2,0,1).unsqueeze(0)
-            return data
+            data = data.permute(2,0,1)
+            # data = resize(data).unsqueeze(0)
             # data = torch.mean(data,dim=0)
             # return torch.flatten(data)
-        else:
-            return data.permute(2,0,1)
+        # else:
             # data = torch.mean(data,dim=1)
             # return data.view(data.shape[0],-1)
+        
+        return data
 
     def get_state(self,obs=None):
         # self.frames = self.frames[1:] + [self.get_screen(obs)]
         self.frames = self.frames[1:] + [self.get_screen(obs)]
-        state = torch.cat(self.frames, dim=-2).to(self.device)
+        state = torch.cat(self.frames, dim=-1).to(self.device)
         # # state = torch.Tensor(obs).to(self.device)
         # return state
         # im = self.im_prep(obs['pov'])
@@ -449,8 +449,7 @@ class DQNAgent:
         # Resize, and add a batch dimension (BCHW)
         # return resize(screen).unsqueeze(0)
         screen = self.im_prep(obs)
-        return screen
-        # return resize(screen)
+        return resize(screen)
 
     def act_to_ind(self,action,batch_size):
         indeces = torch.zeros(size=(batch_size,1),dtype=torch.long)
@@ -518,6 +517,7 @@ class DQNAgent:
         self.is_test = False
         
         obs = self.env.reset()
+        state = self.get_state(obs)
         for _ in range(random.randint(0, 10)):
             obs, _, _, _= self.env.step(1)
             state = self.get_state(obs)
@@ -528,13 +528,16 @@ class DQNAgent:
         epsilons = []
         losses = []
         scores = []
+        avg_scores = []
         score = 0
+        score_avg = 0
+        tau_avg = 100
 
         begin_idx = 0
 
         for frame_idx in range(1, num_frames + 1):
             action = self.select_action(state)
-            next_state, reward, done, info = self.step(action,frame_idx-begin_idx,score)
+            next_state, reward, done = self.step(action,frame_idx-begin_idx,score)
 
             state = next_state
             score += reward
@@ -542,9 +545,6 @@ class DQNAgent:
             # PER: increase beta
             fraction = min(frame_idx / num_frames, 1.0)
             self.beta = self.beta + fraction * (1.0 - self.beta)
-
-            if info["ale.lives"] != lives:
-                lives = info["ale.lives"]
 
             # if episode ends
             if done:
@@ -554,14 +554,16 @@ class DQNAgent:
                     obs, _, _, _= self.env.step(1)
                     state = self.get_state(obs)
                 scores.append(score)
+                score_avg += (-score_avg + score)/tau_avg
+                avg_scores.append(score_avg)
                 score = 0
                 begin_idx = frame_idx
 
             # if training is ready
-            if len(self.memory) >= self.batch_size:
-                loss = self.update_model()
+            if len(self.memory) >= self.min_memory:
+                if update_cnt % self.main_update == 0:
+                    loss = self.update_model()
                 losses.append(loss)
-                update_cnt += 1
                 
                 # linearly decrease epsilon
                 self.epsilon = max(self.min_epsilon, self.epsilon - (self.max_epsilon - self.min_epsilon) * self.epsilon_decay)
@@ -573,10 +575,11 @@ class DQNAgent:
                     # self.target_update = min(int(self.target_update*1.2),3000)
                     # update_cnt = 0
                     # print("target_update period: {}".format(self.target_update))
+                update_cnt += 1
 
             # plotting
             if frame_idx % plotting_interval == 0:
-                self._plot(frame_idx, scores, losses, epsilons)
+                self._plot(frame_idx, scores, avg_scores, losses, epsilons)
                 
         self.env.close()
                 
@@ -613,13 +616,13 @@ class DQNAgent:
         # G_t   = r + gamma * v(s_{t+1})  if state != Terminal
         #       = r                       otherwise
         curr_q_value = self.dqn(state).gather(1, action)
-        # next_q_value = self.dqn_target(next_state).max(dim=1, keepdim=True)[0].detach()
-        next_q_value = self.dqn_target(next_state).gather(1, self.dqn(next_state).argmax(dim=1, keepdim=True)).detach()
+        next_q_value = self.dqn_target(next_state).max(dim=1, keepdim=True)[0].detach()
+        # next_q_value = self.dqn_target(next_state).gather(1, self.dqn(next_state).argmax(dim=1, keepdim=True)).detach()
         mask = 1 - done
         target = (reward + self.gamma * next_q_value * mask).to(self.device)
 
         # calculate element-wise dqn loss
-        elementwise_loss = F.smooth_l1_loss(curr_q_value, target, reduction="none")
+        elementwise_loss = F.smooth_l1_loss(curr_q_value, target)
 
         return elementwise_loss
 
@@ -627,18 +630,21 @@ class DQNAgent:
         """Hard update: target <- local."""
         self.dqn_target.load_state_dict(self.dqn.state_dict())
                 
-    def _plot(self, frame_idx: int, scores: List[float], losses: List[float], epsilons: List[float]):
+    def _plot(self, frame_idx: int, scores: List[float], avg_scores: List[float], losses: List[float], epsilons: List[float]):
         """Plot the training progresses."""
         # clear_output(True)
         plt.clf()
         plt.figure(figsize=(20, 5))
-        plt.subplot(131)
+        plt.subplot(141)
         plt.title('frame %s. score: %s' % (frame_idx, np.mean(scores[-10:])))
         plt.plot(scores)
-        plt.subplot(132)
+        plt.subplot(142)
+        plt.title('avg score')
+        plt.plot(avg_scores)
+        plt.subplot(143)
         plt.title('loss')
         plt.plot(losses)
-        plt.subplot(133)
+        plt.subplot(144)
         plt.title('epsilons')
         plt.plot(epsilons)
         # plt.show()
@@ -649,19 +655,20 @@ class DQNAgent:
 # env_id = "CartPole-v1"
 # env_id = "CarRacing-v0"
 # env_id = 'MineRLNavigateDense-v0'
-env_id = "Breakout-v0"
+env_id = "Breakout-v4"
 env = gym.make(env_id)
 # env.reset()
 
 # parameters
 pre_num_frames = 500000
-num_frames = 3000000
+num_frames = 5000000
 memory_size = 100000
 batch_size = 32
+main_update = 4
 target_update = 10000
 epsilon_decay = 1 / 1000000
 
-agent = DQNAgent(env, memory_size, batch_size, target_update, epsilon_decay)
+agent = DQNAgent(env=env, memory_size=memory_size, batch_size=batch_size, main_update=main_update, target_update=target_update, epsilon_decay=epsilon_decay)
 
 # agent.pretrain(pre_num_frames)
 
