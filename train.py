@@ -406,7 +406,7 @@ class DQNAgent:
     def get_state(self,obs=None):
         # self.frames = self.frames[1:] + [self.get_screen(obs)]
         self.frames = self.frames[1:] + [self.get_screen(obs)]
-        state = torch.cat(self.frames, dim=-1).to(self.device)
+        state = torch.cat(self.frames, dim=-3).to(self.device)
         # # state = torch.Tensor(obs).to(self.device)
         # return state
         # im = self.im_prep(obs['pov'])
@@ -655,18 +655,18 @@ class DQNAgent:
 # env_id = "CartPole-v1"
 # env_id = "CarRacing-v0"
 # env_id = 'MineRLNavigateDense-v0'
-env_id = "Breakout-v4"
+env_id = "BreakoutDeterministic-v4"
 env = gym.make(env_id)
 # env.reset()
 
 # parameters
 pre_num_frames = 500000
-num_frames = 5000000
-memory_size = 100000
+num_frames = 4000000
+memory_size = 350000
 batch_size = 32
 main_update = 4
 target_update = 10000
-epsilon_decay = 1 / 1000000
+epsilon_decay = 1 / 500000
 
 agent = DQNAgent(env=env, memory_size=memory_size, batch_size=batch_size, main_update=main_update, target_update=target_update, epsilon_decay=epsilon_decay)
 
