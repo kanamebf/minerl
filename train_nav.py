@@ -182,9 +182,9 @@ class Network(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward method implementation."""
-        if len(x.shape) == 1:
+        if len(x.shape) == 2:
             x = x.unsqueeze(0)
-        im = x[...,:-2].view(-1,x.shape[1],video_height,video_width)
+        im = x[...,:-2].view(-1,x.shape[-2],video_height,video_width)
         # im = x.view(-1,self.state_dim[-3],self.state_dim[-2],self.state_dim[-1])
         # im = x.view(-1,3,self.status_,video_width)
         im = self.net(im)
@@ -267,7 +267,7 @@ class DQNAgent:
 
         # obs_dim = env.observation_space.shape[0]
         obs = self.env.reset()
-        self.n_frames = 4
+        self.n_frames = 2
         self.frames = [self.get_screen(obs)]*self.n_frames
         self.state_dim = self.get_state(obs).shape
 
@@ -280,7 +280,7 @@ class DQNAgent:
         self.prev_score = 0
 
         # Prioritized Experience Replay
-        self.min_memory = 30000
+        self.min_memory = 30000 if memory_size > 30000 else int(memory_size*0.1)
         self.beta = beta
         self.prior_eps = prior_eps
         # self.memory = PrioritizedReplayBuffer(self.state_dim, memory_size, self.batch_size, alpha)
@@ -678,11 +678,11 @@ env = gym.make(env_id)
 # parameters
 pre_num_frames = 500000
 num_frames = 10000000
-memory_size = 500000
-batch_size = 64
+memory_size = 2000
+batch_size = 4
 main_update = 4
 target_update = 10000
-epsilon_decay = 1 / 500000
+epsilon_decay = 1 / 50000
 
 now = datetime.datetime.now()
 save_path = os.path.join("./models",env_id)
