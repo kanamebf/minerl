@@ -2,7 +2,6 @@ import os
 import random
 import subprocess
 import datetime
-import math
 from typing import Dict, List, Tuple
 
 import gym
@@ -358,7 +357,7 @@ class DQNAgent:
         self.time -= 1
         if self.time < 0:
             self.time = time_limit
-            if math.abs(score-self.prev_score) < rew_limit:
+            if abs(score-self.prev_score) < rew_limit:
                 done = True
             else:
                 self.prev_score = score
