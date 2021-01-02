@@ -1,5 +1,7 @@
 import os
 import random
+import subprocess
+import datetime
 from typing import Dict, List, Tuple
 
 import gym
@@ -661,21 +663,26 @@ class DQNAgent:
         plt.close()
 
 # environment
-# env_id = "CartPole-v1"
+env_id = "CartPole-v1"
 # env_id = "CarRacing-v0"
 # env_id = 'MineRLNavigateDense-v0'
-env_id = "BreakoutDeterministic-v4"
+# env_id = "BreakoutDeterministic-v4"
 env = gym.make(env_id)
 # env.reset()
 
 # parameters
 pre_num_frames = 500000
 num_frames = 5000000
-memory_size = 500000
+memory_size = 10000
 batch_size = 32
 main_update = 4
 target_update = 10000
 epsilon_decay = 1 / 500000
+
+now = datetime.datetime.now()
+save_path = os.path.join("./models",env_id)
+subprocess.run(["mkdir", "-p", save_path])
+save_path = os.path.join(save_path,now.strftime('ddqn_per_%Y%m%d%H%M%S.ml'))
 
 agent = DQNAgent(env=env, memory_size=memory_size, batch_size=batch_size, main_update=main_update, target_update=target_update, epsilon_decay=epsilon_decay)
 
