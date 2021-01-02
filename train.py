@@ -665,7 +665,7 @@ class DQNAgent:
         plt.title('epsilons')
         plt.plot(epsilons)
         # plt.show()
-        plt.savefig('training_{}_withlargermemory_lifetrick_ddqn_per.png'.format(self.env.spec.id))
+        plt.savefig('training_{}.png'.format(self.env.spec.id))
         plt.close()
 
 # environment
@@ -678,9 +678,9 @@ env = gym.make(env_id)
 
 # parameters
 pre_num_frames = 500000
-num_frames = 5000000
-memory_size = 100000
-batch_size = 32
+num_frames = 8000000
+memory_size = 1000000
+batch_size = 64
 main_update = 4
 target_update = 10000
 epsilon_decay = 1 / 500000

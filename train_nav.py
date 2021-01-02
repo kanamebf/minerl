@@ -2,6 +2,7 @@ import os
 import random
 import subprocess
 import datetime
+import math
 from typing import Dict, List, Tuple
 
 import gym
@@ -188,7 +189,7 @@ class Network(nn.Module):
         # im = x.view(-1,self.state_dim[-3],self.state_dim[-2],self.state_dim[-1])
         # im = x.view(-1,3,self.status_,video_width)
         im = self.net(im)
-        feat = torch.cat([im.view(im.shape[0],-1),x[...,-2:].view(x.shape[0],-1)],dim=1)
+        feat = torch.cat([im.view(im.shape[0],-1),x[...,-2:].reshape(x.shape[0],-1)],dim=1)
         feat = self.act1(self.fc1(feat))
         feat = self.fc2(feat)
         # x = self.net(x[:,-2:])
@@ -276,6 +277,9 @@ class DQNAgent:
         # self.action_dim = env.action_space.n
         # action_dim = env.action_space.shape[0]
 
+        self.time = 0
+        self.prev_score = 0
+
         # Prioritized Experience Replay
         self.min_memory = 30000
         self.beta = beta
@@ -343,16 +347,21 @@ class DQNAgent:
 
         return action
 
-    def step(self, action: torch.Tensor, time, score) -> Tuple[torch.Tensor, np.float64, bool]:
+    def step(self, action: torch.Tensor, score) -> Tuple[torch.Tensor, np.float64, bool]:
         """Take an action and return the response of the env."""
         noop = self.env.action_space.noop
         next_obs, reward, done, _ = self.env.step(self.format_action(noop,action))
         # next_obs, reward, done, tmp = self.env.step(action)
 
-        time_limit_idx = 2000
-        rew_limit = -5
-        if score < rew_limit or (time > time_limit_idx and score < -rew_limit) or time>time_limit_idx*5:
-            done = True
+        time_limit = 2000
+        rew_limit = 5
+        self.time -= 1
+        if self.time < 0:
+            self.time = time_limit
+            if math.abs(score-self.prev_score) < rew_limit:
+                done = True
+            else:
+                self.prev_score = score
 
         next_state = self.get_state(next_obs)
 
@@ -539,11 +548,9 @@ class DQNAgent:
         score_avg = 0
         tau_avg = 100
 
-        begin_idx = 0
-
         for frame_idx in range(1, num_frames + 1):
             action = self.select_action(state)
-            next_state, reward, done = self.step(action,frame_idx-begin_idx,score)
+            next_state, reward, done = self.step(action,score)
 
             state = next_state
             score += reward
@@ -563,7 +570,6 @@ class DQNAgent:
                 score_avg += (-score_avg + score)/tau_avg
                 avg_scores.append(score_avg)
                 score = 0
-                begin_idx = frame_idx
 
             # if training is ready
             if len(self.memory) >= self.min_memory:
@@ -672,9 +678,9 @@ env = gym.make(env_id)
 
 # parameters
 pre_num_frames = 500000
-num_frames = 4000000
-memory_size = 10000
-batch_size = 4
+num_frames = 10000000
+memory_size = 500000
+batch_size = 64
 main_update = 4
 target_update = 10000
 epsilon_decay = 1 / 500000
