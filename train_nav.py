@@ -1,5 +1,7 @@
 import os
 import random
+import subprocess
+import datetime
 from typing import Dict, List, Tuple
 
 import gym
@@ -174,9 +176,9 @@ class Network(nn.Module):
         linear_input_size = convw * convh * channels[-1] + in_ch * 2
 
         self.net = nn.Sequential(*layers)
-        self.fc1 = nn.Linear(linear_input_size, 32)
+        self.fc1 = nn.Linear(linear_input_size, 512)
         self.act1 = nn.Tanh()
-        self.fc2 = nn.Linear(32, out_dim)
+        self.fc2 = nn.Linear(512, out_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward method implementation."""
@@ -265,7 +267,7 @@ class DQNAgent:
 
         # obs_dim = env.observation_space.shape[0]
         obs = self.env.reset()
-        self.n_frames = 2
+        self.n_frames = 4
         self.frames = [self.get_screen(obs)]*self.n_frames
         self.state_dim = self.get_state(obs).shape
 
@@ -517,7 +519,7 @@ class DQNAgent:
                 break
         
 
-    def train(self, num_frames: int, plotting_interval: int = 200):
+    def train(self, num_frames: int, save_path, plotting_interval: int = 200):
         """Train the agent."""
         self.is_test = False
         
@@ -579,6 +581,11 @@ class DQNAgent:
                     # self.target_update = min(int(self.target_update*1.2),3000)
                     # update_cnt = 0
                     # print("target_update period: {}".format(self.target_update))
+
+                if update_cnt % (self.target_update*10) == 0:
+                    torch.save(self.dqn.state_dict(), save_path)
+                    print("saved model")
+
                 update_cnt += 1
 
             # plotting
@@ -666,14 +673,20 @@ env = gym.make(env_id)
 # parameters
 pre_num_frames = 500000
 num_frames = 4000000
-memory_size = 1000
+memory_size = 10000
 batch_size = 4
 main_update = 4
 target_update = 10000
 epsilon_decay = 1 / 500000
 
+now = datetime.datetime.now()
+save_path = os.path.join("./models",env_id)
+subprocess.run(["mkdir", "-p", save_path])
+save_path = os.path.join(save_path,now.strftime('ddqn_per_%Y%m%d%H%M%S.ml'))
+print("will save models at: {}".format(save_path))
+
 agent = DQNAgent(env=env, memory_size=memory_size, batch_size=batch_size, main_update=main_update, target_update=target_update, epsilon_decay=epsilon_decay)
 
 # agent.pretrain(pre_num_frames)
 
-agent.train(num_frames)
+agent.train(num_frames,save_path)
