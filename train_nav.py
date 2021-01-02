@@ -156,10 +156,10 @@ class Network(nn.Module):
 
         convw = video_width
         convh = video_height
-        in_ch = in_dim[-3]
+        in_ch = in_dim[-2]
         kernels = [8,4,3]
         strides = [4,2,1]
-        channels = [in_ch,32,64,64]
+        channels = [in_ch,4,8,8]
         layers = []
         def conv2d_size_out(size, kernel_size = 5, stride = 2):
             return (size - (kernel_size - 1) - 1) // stride  + 1
@@ -171,23 +171,23 @@ class Network(nn.Module):
             layers.append(nn.BatchNorm2d(channels[ind+1]))
             layers.append(nn.LeakyReLU())
         # linear_input_size = convw * convh * 32 + 2 # image features + compass + inventory
-        linear_input_size = convw * convh * channels[-1] + self.n_frames * 2
+        linear_input_size = convw * convh * channels[-1] + in_ch * 2
 
         self.net = nn.Sequential(*layers)
-        self.fc1 = nn.Linear(linear_input_size, 512)
+        self.fc1 = nn.Linear(linear_input_size, 32)
         self.act1 = nn.Tanh()
-        self.fc2 = nn.Linear(512, out_dim)
+        self.fc2 = nn.Linear(32, out_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward method implementation."""
-        if len(x.shape) == 1 or len(x.shape) == 3:
+        if len(x.shape) == 1:
             x = x.unsqueeze(0)
         im = x[...,:-2].view(-1,x.shape[1],video_height,video_width)
         # im = x.view(-1,self.state_dim[-3],self.state_dim[-2],self.state_dim[-1])
         # im = x.view(-1,3,self.status_,video_width)
         im = self.net(im)
         feat = torch.cat([im.view(im.shape[0],-1),x[...,-2:].view(x.shape[0],-1)],dim=1)
-        feat = self.act1(self.fc1(feat.view(feat.shape[0],-1)))
+        feat = self.act1(self.fc1(feat))
         feat = self.fc2(feat)
         # x = self.net(x[:,-2:])
         return feat
@@ -265,13 +265,13 @@ class DQNAgent:
 
         # obs_dim = env.observation_space.shape[0]
         obs = self.env.reset()
-        self.n_frames = 4
+        self.n_frames = 2
         self.frames = [self.get_screen(obs)]*self.n_frames
         self.state_dim = self.get_state(obs).shape
 
         self.act_keys = ['attack','back','forward','jump','left','place','right','sneak','sprint','camera']
-        # self.action_dim = len(self.act_keys) + 3 + 1 #act_keys + camera(the other direction) + no-op
-        self.action_dim = env.action_space.n
+        self.action_dim = len(self.act_keys) + 3 + 1 #act_keys + camera(the other direction) + no-op
+        # self.action_dim = env.action_space.n
         # action_dim = env.action_space.shape[0]
 
         # Prioritized Experience Replay
@@ -343,7 +343,8 @@ class DQNAgent:
 
     def step(self, action: torch.Tensor, time, score) -> Tuple[torch.Tensor, np.float64, bool]:
         """Take an action and return the response of the env."""
-        next_obs, reward, done = self.env.step(self.format_action(noop,action))
+        noop = self.env.action_space.noop
+        next_obs, reward, done, _ = self.env.step(self.format_action(noop,action))
         # next_obs, reward, done, tmp = self.env.step(action)
 
         time_limit_idx = 2000
@@ -385,7 +386,6 @@ class DQNAgent:
         return loss.item()
 
     def im_prep(self,data):
-        data = self.im_prep(data['pov'])
         data = torch.Tensor(data)
         
         # data = data.view(video_height,video_width,-1)
@@ -407,7 +407,7 @@ class DQNAgent:
     def get_state(self,obs=None):
         # self.frames = self.frames[1:] + [self.get_screen(obs)]
         self.frames = self.frames[1:] + [self.get_screen(obs)]
-        state = torch.cat(self.frames, dim=-3).to(self.device)
+        state = torch.cat(self.frames, dim=0).to(self.device)
         # # state = torch.Tensor(obs).to(self.device)
         # return state
         # im = self.im_prep(obs['pov'])
@@ -449,12 +449,12 @@ class DQNAgent:
         # screen = torch.Tensor(screen)
         # Resize, and add a batch dimension (BCHW)
         # return resize(screen).unsqueeze(0)
-        screen = self.im_prep(obs)
+        screen = self.im_prep(obs['pov'])
         screen = resize(screen)
         other = np.stack([obs['compassAngle'],obs['inventory']['dirt']],axis=len(obs['compassAngle'].shape)-1)
         other = torch.Tensor(other)
-        screen = torch.cat([screen.flatten(),other],dim=1)
-        return screen
+        screen = torch.cat([screen.flatten(),other],dim=0)
+        return screen.unsqueeze(0)
 
     def act_to_ind(self,action,batch_size):
         indeces = torch.zeros(size=(batch_size,1),dtype=torch.long)
@@ -666,8 +666,8 @@ env = gym.make(env_id)
 # parameters
 pre_num_frames = 500000
 num_frames = 4000000
-memory_size = 350000
-batch_size = 32
+memory_size = 1000
+batch_size = 4
 main_update = 4
 target_update = 10000
 epsilon_decay = 1 / 500000
