@@ -522,7 +522,7 @@ class DQNAgent:
                 break
         
 
-    def train(self, num_frames: int, plotting_interval: int = 200):
+    def train(self, num_frames: int, save_path, plotting_interval: int = 200):
         """Train the agent."""
         self.is_test = False
         
@@ -582,9 +582,15 @@ class DQNAgent:
                 # if hard update is needed
                 if update_cnt % self.target_update == 0:
                     self._target_hard_update()
+                    print("updated target at count {}, frame {}".format(update_cnt,frame_idx))
                     # self.target_update = min(int(self.target_update*1.2),3000)
                     # update_cnt = 0
                     # print("target_update period: {}".format(self.target_update))
+                
+                if update_cnt % (self.target_update*10) == 0:
+                    torch.save(self.dqn.state_dict(), save_path)
+                    print("saved model")
+
                 update_cnt += 1
 
             # plotting
@@ -663,17 +669,17 @@ class DQNAgent:
         plt.close()
 
 # environment
-env_id = "CartPole-v1"
+# env_id = "CartPole-v1"
 # env_id = "CarRacing-v0"
 # env_id = 'MineRLNavigateDense-v0'
-# env_id = "BreakoutDeterministic-v4"
+env_id = "BreakoutDeterministic-v4"
 env = gym.make(env_id)
 # env.reset()
 
 # parameters
 pre_num_frames = 500000
 num_frames = 5000000
-memory_size = 10000
+memory_size = 100000
 batch_size = 32
 main_update = 4
 target_update = 10000
@@ -683,9 +689,10 @@ now = datetime.datetime.now()
 save_path = os.path.join("./models",env_id)
 subprocess.run(["mkdir", "-p", save_path])
 save_path = os.path.join(save_path,now.strftime('ddqn_per_%Y%m%d%H%M%S.ml'))
-
+print("will save models at: {}".format(save_path)
+)
 agent = DQNAgent(env=env, memory_size=memory_size, batch_size=batch_size, main_update=main_update, target_update=target_update, epsilon_decay=epsilon_decay)
 
 # agent.pretrain(pre_num_frames)
 
-agent.train(num_frames)
+agent.train(num_frames,save_path)
