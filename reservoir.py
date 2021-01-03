@@ -125,9 +125,9 @@ class ESN():
             rout.update(self.R)
 
     def step(self):
-        logging.info(self.inp)
+        # logging.info(self.inp)
         dX = (-self.X + np.dot(self.W_rc,self.R) + np.dot(self.W_in,self.inp) + self.get_fb() + self.noise()) * self.dt / self.tau
-        logging.info(dX)
+        # logging.info(dX)
         self.X += dX
         self.R = self.activation_F(self.X)
         self.update_routs()

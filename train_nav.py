@@ -17,6 +17,8 @@ from segment_tree import MinSegmentTree, SumSegmentTree
 
 from PIL import Image
 
+from reservoir import ESN
+
 import minerl
 
 video_height = 64
@@ -173,8 +175,8 @@ class Network(nn.Module):
             layers.append(nn.BatchNorm2d(channels[ind+1]))
             layers.append(nn.LeakyReLU())
         # linear_input_size = convw * convh * 32 + 2 # image features + compass + inventory
-        # linear_input_size = convw * convh * channels[-1] + in_ch * 2 #navigate
-        linear_input_size = convw * convh * channels[-1] #treechop
+        linear_input_size = convw * convh * channels[-1] + in_ch * 2 #navigate
+        # linear_input_size = convw * convh * channels[-1] #treechop
 
         self.net = nn.Sequential(*layers)
         self.fc1 = nn.Linear(linear_input_size, 512)
@@ -189,9 +191,9 @@ class Network(nn.Module):
         # im = x.view(-1,self.state_dim[-3],self.state_dim[-2],self.state_dim[-1])
         # im = x.view(-1,3,self.status_,video_width)
         im = self.net(im)
-        # feat = torch.cat([im.view(im.shape[0],-1),x[...,-2:].reshape(x.shape[0],-1)],dim=1) #navigate
-        feat = self.act1(self.fc1(im.view(im.shape[0],-1))) #tree chop
-        # feat = self.act1(self.fc1(feat))
+        feat = torch.cat([im.view(im.shape[0],-1),x[...,-2:].reshape(x.shape[0],-1)],dim=1) #navigate
+        feat = self.act1(self.fc1(feat)) #navigate
+        # feat = self.act1(self.fc1(im.view(im.shape[0],-1))) #tree chop
         feat = self.fc2(feat)
         # x = self.net(x[:,-2:])
         return feat
@@ -267,14 +269,18 @@ class DQNAgent:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print("device: {}".format(self.device))
 
+        N_vid = video_height*video_width*1
+        self.esn = ESN(N=N_vid,N_in=N_vid)
+        self.esn.dt = 5.0
+
         # obs_dim = env.observation_space.shape[0]
         obs = self.env.reset()
-        self.n_frames = 4
+        self.n_frames = 1
         self.frames = [self.get_screen(obs)]*self.n_frames
         self.state_dim = self.get_state(obs).shape
 
-        # self.act_keys = ['attack','back','forward','jump','left','place','right','sneak','sprint','camera'] #navigate
-        self.act_keys = ['attack','back','forward','jump','left','right','sneak','sprint','camera'] #treechop
+        self.act_keys = ['attack','back','forward','jump','left','place','right','sneak','sprint','camera'] #navigate
+        # self.act_keys = ['attack','back','forward','jump','left','right','sneak','sprint','camera'] #treechop
         self.action_dim = len(self.act_keys) + 3 + 1 #act_keys + camera(the other direction) + no-op
         # self.action_dim = env.action_space.n
         # action_dim = env.action_space.shape[0]
@@ -339,22 +345,22 @@ class DQNAgent:
         action = no_act()
 
         # Navigate Version
-        # if act_ind == 5:
-        #     action[self.act_keys[act_ind]] = "dirt"
-        # elif act_ind < 9:
-        #     action[self.act_keys[act_ind]] = 1
-        # elif act_ind == 9 or act_ind == 10:
-        #     action[self.act_keys[-1]][0] = 3.0*pow(-1,act_ind%9)
-        # elif act_ind == 11 or act_ind == 12:
-        #     action[self.act_keys[-1]][1] = 3.0*pow(-1,act_ind%11)
+        if act_ind == 5:
+            action[self.act_keys[act_ind]] = "dirt"
+        elif act_ind < 9:
+            action[self.act_keys[act_ind]] = 1
+        elif act_ind == 9 or act_ind == 10:
+            action[self.act_keys[-1]][0] = 3.0*pow(-1,act_ind%9)
+        elif act_ind == 11 or act_ind == 12:
+            action[self.act_keys[-1]][1] = 3.0*pow(-1,act_ind%11)
 
         # Treechop Version
-        if act_ind < 8:
-            action[self.act_keys[act_ind]] = 1
-        elif act_ind == 8 or act_ind == 9:
-            action[self.act_keys[-1]][0] = 3.0*pow(-1,act_ind%8)
-        elif act_ind == 10 or act_ind == 11:
-            action[self.act_keys[-1]][1] = 3.0*pow(-1,act_ind%10)
+        # if act_ind < 8:
+        #     action[self.act_keys[act_ind]] = 1
+        # elif act_ind == 8 or act_ind == 9:
+        #     action[self.act_keys[-1]][0] = 3.0*pow(-1,act_ind%8)
+        # elif act_ind == 10 or act_ind == 11:
+        #     action[self.act_keys[-1]][1] = 3.0*pow(-1,act_ind%10)
 
         return action
 
@@ -365,8 +371,8 @@ class DQNAgent:
         # next_obs, reward, done, tmp = self.env.step(action)
 
         time_limit = 2000
-        # rew_limit = 5 #navigate
-        rew_limit = 1 #treechop
+        rew_limit = 5 #navigate
+        # rew_limit = 1 #treechop
         self.time -= 1
         if self.time < 0:
             self.time = time_limit
@@ -474,10 +480,15 @@ class DQNAgent:
         # return resize(screen).unsqueeze(0)
         screen = self.im_prep(obs['pov'])
         screen = resize(screen)
-        # other = np.stack([obs['compassAngle'],obs['inventory']['dirt']],axis=len(obs['compassAngle'].shape)-1) #navigate
-        # other = torch.Tensor(other) #navigate
-        # screen = torch.cat([screen.flatten(),other],dim=0) #navigate
-        screen = screen.flatten() #treechop
+        self.esn.input(screen.view(-1,1))
+        n_steps = int(10/self.esn.dt) # 10ms/1ms = 10 simulation steps
+        for _ in range(n_steps):
+            self.esn.step()
+        screen = torch.Tensor(self.esn.R)
+        other = np.stack([obs['compassAngle'],obs['inventory']['dirt']],axis=len(obs['compassAngle'].shape)-1) #navigate
+        other = torch.Tensor(other) #navigate
+        screen = torch.cat([screen.flatten(),other],dim=0) #navigate
+        # screen = screen.flatten() #treechop
         return screen.unsqueeze(0)
 
     def act_to_ind(self,action,batch_size):
@@ -546,6 +557,7 @@ class DQNAgent:
         self.is_test = False
         
         obs = self.env.reset()
+        self.esn.reset()
         self.frames = [self.get_screen(obs)]*self.n_frames
         state = self.get_state(obs)
         # for _ in range(random.randint(0, 10)):
@@ -575,6 +587,7 @@ class DQNAgent:
             # if episode ends
             if done:
                 obs = self.env.reset()
+                self.esn.reset()
                 self.frames = [self.get_screen(obs)]*self.n_frames
                 # for _ in range(random.randint(0, 10)):
                 #     obs, _, _, _= self.env.step(1)
@@ -618,6 +631,7 @@ class DQNAgent:
         self.is_test = True
         
         state = self.env.reset()
+        self.esn.reset()
         done = False
         score = 0
         
@@ -678,31 +692,30 @@ class DQNAgent:
         plt.title('epsilons')
         plt.plot(epsilons)
         # plt.show()
-        plt.savefig('training_{}.png'.format(self.env.spec.id))
+        plt.savefig('training_esn_{}.png'.format(self.env.spec.id))
         plt.close()
 
 # environment
 # env_id = "CartPole-v1"
 # env_id = "CarRacing-v0"
-# env_id = 'MineRLNavigateDense-v0'
-env_id = 'MineRLTreechop-v0'
+env_id = 'MineRLNavigateDense-v0'
+# env_id = 'MineRLTreechop-v0'
 # env_id = "BreakoutDeterministic-v4"
 env = gym.make(env_id)
-# env.reset()
 
 # parameters
 pre_num_frames = 500000
 num_frames = 10000000
-memory_size = 500000
-batch_size = 32
+memory_size = 2000
+batch_size = 4
 main_update = 4
 target_update = 10000
-epsilon_decay = 1 / 200000
+epsilon_decay = 1 / 20000
 
 now = datetime.datetime.now()
 save_path = os.path.join("./models",env_id)
 subprocess.run(["mkdir", "-p", save_path])
-save_path = os.path.join(save_path,now.strftime('ddqn_per_%Y%m%d%H%M%S.ml'))
+save_path = os.path.join(save_path,now.strftime('ddqn_esn_%Y%m%d%H%M%S.ml'))
 print("will save models at: {}".format(save_path))
 
 agent = DQNAgent(env=env, memory_size=memory_size, batch_size=batch_size, main_update=main_update, target_update=target_update, epsilon_decay=epsilon_decay)
